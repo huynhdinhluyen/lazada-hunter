@@ -50,7 +50,7 @@ Modern e-commerce enterprises, retailers, and market analysts face critical chal
 
 ## 2. Key Capabilities
 
-### 💬 1. Intelligent AI Shopping Advisor (`/chat`)
+### 💬 1. Intelligent AI Shopping Advisor
 - **Natural Language Understanding**: Understands colloquial purchasing inquiries (e.g., *"Find gaming wireless mouse under 300k"*).
 - **Direct Lazada Link Ingestion**: Users can paste any Lazada product URL directly into the chat input. The system automatically fetches live page data, extracts reviews, generates competitive pricing bounds, and renders an interactive product card.
 - **6-Intent Classification Engine**:
@@ -62,7 +62,7 @@ Modern e-commerce enterprises, retailers, and market analysts face critical chal
   6. `SAFETY_GUARD`: Filters harmful or malicious queries.
 - **Semantic Caching**: Instant response retrieval from Redis RAM for identical or synonymous queries across all chat turns.
 
-### 📦 2. Comprehensive Product Catalog & Market Insights (`/catalog`)
+### 📦 2. Comprehensive Product Catalog & Market Insights
 - **Dual Presentation Modes**: Switch seamlessly between **Grid View** (uniform card heights with clamped 2-line titles) and **Table View** (dense professional data table).
 - **In-Depth AI Analysis Modal**:
   - Standardized product naming and category classification.
@@ -74,13 +74,13 @@ Modern e-commerce enterprises, retailers, and market analysts face critical chal
 - **Time-Series Price Volatility Chart**: Interactive SVG visualizer displaying historical price movements.
 - **Multi-Format Data Export**: One-click generation of styled **Excel (.xlsx)**, **CSV (UTF-8 with BOM)**, and **JSON** files.
 
-### 📌 3. User Watchlist & Background Price Tracking (`/watchlist`)
+### 📌 3. User Watchlist & Background Price Tracking
 - **One-Click Bookmarking**: Bookmark products directly from the AI Chat recommendations or the Product Catalog.
 - **Instant Telegram Notification**: Automatically dispatches a formatted photo bulletin to Telegram upon saving a product.
 - **Automated Background Price Tracker**: Scheduled background worker scans all items in user watchlists every 30 minutes, recording fluctuations into PostgreSQL `PriceHistory`.
 - **Dual-Layer Price Drop Guardrail**: Guarantees that Telegram price alerts are dispatched **exclusively when prices drop** compared to prior records ($\text{new\_price} < \text{old\_price}$ with $\ge 5\%$ drop), filtering out unchanged or increased prices.
 
-### 📢 4. Telegram Notification Center (`/telegram`)
+### 📢 4. Telegram Notification Center
 - **Automated Media Bulletins (`sendPhoto`)**: Sends photo-backed HTML summaries upon product bookmarking or price drops.
 - **Real-Time Price Drop Alerts**: Triggered whenever a watched product drops below the user-configured percentage threshold.
 - **Diagnostic Controls**: Real-time Telegram Bot connection verification, webhook latency testing, and interactive ping test.
