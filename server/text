@@ -1,0 +1,49 @@
+┌────────────────────────────────────────────────────────────────────────┐
+│                        USER INTERFACE LAYER                            │
+│                        │
+│  - Web Dashboard UI (Next.js / FastAPI Swagger)                        │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │ Raw Message / Action
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                    INTENT & INTELLIGENCE ROUTER                        │
+│                                                                        │
+│   [Tầng 1: Fast-Path Guardrails] ──(Vi phạm / Chitchat)──► Fast Reply  │
+│          │ (Passed)                                                    │
+│          ▼                                                             │
+│   [Tầng 2: Semantic Cache]                      │
+│          │                                                             │
+│     (Cache Hit) ───────────────────────────────► Return Cached Data    │
+│          │ (Cache Miss)                                                │
+│          ▼                                                             │
+│   [Tầng 3: Gemini 2.5 Flash (Structured Outputs)]                      │
+│          │ (Extract: Keyword, Budget, URL, Filter Criteria)            │
+│          │ (Fallback to Generic Heuristics on Error)                   │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │ Normalized Query / Trigger Task
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│               ORCHESTRATION & BACKGROUND WORKER LAYER                  │
+│                                                                        │
+│   - Single-Flight Lock (Chống Duplicate Request đồng thời)             │
+│   - Worker Pool / Rate Limiter (Quản lý Delay 2-5s, Jitter)            │
+│   - Job Queue (Background Crawl & Price Monitoring)                    │
+└───────────────────┬────────────────────────────────┬───────────────────┘
+                    │                                │
+                    ▼                                ▼
+┌──────────────────────────────────────┐  ┌──────────────────────────────┐
+│        CRAWLER ENGINE (0đ)           │  │     AI REASONING ENGINE      │
+│ - curl_cffi (JA3/TLS Chrome Spoof)   │  │ - Gemini 2.5 Flash           │
+│ - Patchright (Headless / Anti-bot)   │  │ - Market Sentiment Analysis  │
+│ - HTML Cleaner / Deduplicator        │  │ - Price Anomaly Detection    │
+└───────────────────┬──────────────────┘  └──────────────┬───────────────┘
+                    │                                    │
+                    └─────────────────┬──────────────────┘
+                                      │ Cleaned & Analyzed Data
+                                      ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        STORAGE & NOTIFICATION                          │
+│                                                                        │
+│   - PostgreSQL + pgvector (Products, Semantic Cache, User History)     │
+│   - Telegram Notifier (Price Drop Alerts, Direct Chat Responses)       │
+└────────────────────────────────────────────────────────────────────────┘

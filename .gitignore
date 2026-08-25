@@ -1,0 +1,54 @@
+# Python & Environment
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# Environment Variables & Secrets (Quan trọng: Không đẩy API key/mật khẩu lên Git)
+.env
+.env.local
+.env.*.local
+*.env
+
+# Node & Next.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.next/
+out/
+build/
+dist/
+
+# Playwright & Browsers
+.playwright/
+.browser_profile/
+*/.browser_profile/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+scratch/
+*/scratch/
+*.log
+
+# IDE & OS Files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Database & SQLite files
+*.sqlite3
+*.db
