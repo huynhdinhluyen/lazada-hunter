@@ -17,7 +17,12 @@ class Settings(BaseSettings):
 
     # App
     APP_NAME: str = "E-Commerce Intelligent Crawler"
+    APP_ENV: str = Field(default="DEVELOPMENT", description="Môi trường chạy: DEVELOPMENT | PRODUCTION")
     DEBUG: bool = False
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV.upper() == "PRODUCTION"
 
     # Database Credentials
     POSTGRES_USER: str = Field(default="postgres", description="PostgreSQL Username")
@@ -33,19 +38,15 @@ class Settings(BaseSettings):
     def async_db_url(self) -> str:
         """Tạo chuỗi kết nối Async PostgreSQL (asyncpg) an toàn.
         
-        Tự động chuẩn hóa URL từ các cloud provider (Neon, Supabase, Render, Railway):
-          postgres://...        → postgresql+asyncpg://...
-          postgresql://...      → postgresql+asyncpg://...
-          postgresql+asyncpg:// → giữ nguyên
+        - PRODUCTION: dùng DATABASE_URL (Neon/Supabase/Render), tự chuẩn hóa scheme.
+        - DEVELOPMENT: luôn dùng POSTGRES_* local, bỏ qua DATABASE_URL.
         """
-        if self.DATABASE_URL:
+        if self.is_production and self.DATABASE_URL:
             url = self.DATABASE_URL.get_secret_value()
-            # Chuẩn hóa scheme cho asyncpg
             if url.startswith("postgres://"):
                 url = url.replace("postgres://", "postgresql+asyncpg://", 1)
             elif url.startswith("postgresql://"):
                 url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-            # Nếu đã là postgresql+asyncpg:// thì giữ nguyên
             return url
         pwd = self.POSTGRES_PASSWORD.get_secret_value() if self.POSTGRES_PASSWORD else ""
         return f"postgresql+asyncpg://{self.POSTGRES_USER}:{pwd}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
@@ -54,25 +55,26 @@ class Settings(BaseSettings):
     def sync_db_url(self) -> str:
         """Tạo chuỗi kết nối Sync PostgreSQL (psycopg2) an toàn.
         
-        Tự động chuẩn hóa URL từ các cloud provider:
-          postgres://...           → postgresql://...
-          postgresql+asyncpg://... → postgresql://...
-          postgresql://...         → giữ nguyên
+        - PRODUCTION: dùng DATABASE_URL (Neon/Supabase/Render), tự chuẩn hóa scheme.
+        - DEVELOPMENT: luôn dùng POSTGRES_* local, bỏ qua DATABASE_URL.
         """
-        if self.SYNC_DATABASE_URL:
-            url = self.SYNC_DATABASE_URL.get_secret_value()
-        elif self.DATABASE_URL:
-            url = self.DATABASE_URL.get_secret_value()
-        else:
-            pwd = self.POSTGRES_PASSWORD.get_secret_value() if self.POSTGRES_PASSWORD else ""
-            return f"postgresql://{self.POSTGRES_USER}:{pwd}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
-        
-        # Chuẩn hóa scheme cho psycopg2 (sync)
-        if url.startswith("postgres://"):
-            url = url.replace("postgres://", "postgresql://", 1)
-        elif url.startswith("postgresql+asyncpg://"):
-            url = url.replace("postgresql+asyncpg://", "postgresql://", 1)
-        return url
+        if self.is_production:
+            if self.SYNC_DATABASE_URL:
+                url = self.SYNC_DATABASE_URL.get_secret_value()
+            elif self.DATABASE_URL:
+                url = self.DATABASE_URL.get_secret_value()
+            else:
+                pwd = self.POSTGRES_PASSWORD.get_secret_value() if self.POSTGRES_PASSWORD else ""
+                return f"postgresql://{self.POSTGRES_USER}:{pwd}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+            # Chuẩn hóa về psycopg2 (sync)
+            if url.startswith("postgres://"):
+                url = url.replace("postgres://", "postgresql://", 1)
+            elif url.startswith("postgresql+asyncpg://"):
+                url = url.replace("postgresql+asyncpg://", "postgresql://", 1)
+            return url
+        pwd = self.POSTGRES_PASSWORD.get_secret_value() if self.POSTGRES_PASSWORD else ""
+        return f"postgresql://{self.POSTGRES_USER}:{pwd}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+
 
     # Crawler Settings
     CRAWLER_HEADLESS: bool = True

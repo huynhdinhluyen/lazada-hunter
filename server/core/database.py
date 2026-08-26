@@ -29,7 +29,21 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 def ensure_database_exists():
-    """Tự động kiểm tra và tạo database PostgreSQL nếu chưa tồn tại"""
+    """Tự động kiểm tra và tạo database PostgreSQL nếu chưa tồn tại.
+    
+    - Khi DATABASE_URL được cấu hình (Neon, Supabase, Render, Railway...): 
+      Database đã tồn tại trên cloud, bỏ qua hoàn toàn.
+    - Khi chạy local với POSTGRES_HOST/PORT: 
+      Kết nối và tạo database nếu chưa có.
+    """
+    # PRODUCTION: Cloud managed database đã tồn tại sẵn, không cần tạo
+    if settings.is_production:
+        logger.info(f"☁️ [{settings.APP_ENV}] Sử dụng Cloud Database — bỏ qua bước tạo database tự động.")
+        return
+    
+    logger.info(f"🖥️ [{settings.APP_ENV}] Kết nối PostgreSQL local: {settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}")
+
+    # Local PostgreSQL: tự động tạo database nếu chưa có
     try:
         conn = psycopg2.connect(
             host=settings.POSTGRES_HOST,
@@ -48,14 +62,13 @@ def ensure_database_exists():
         exists = cur.fetchone()
         if not exists:
             cur.execute(f'CREATE DATABASE "{settings.POSTGRES_DB}"')
-            logger.info(f"Database '{settings.POSTGRES_DB}' đã được tạo thành công trên PostgreSQL.")
+            logger.info(f"✅ Database '{settings.POSTGRES_DB}' đã được tạo thành công trên PostgreSQL.")
         else:
             logger.debug(f"Database '{settings.POSTGRES_DB}' đã tồn tại.")
         cur.close()
         conn.close()
     except Exception as e:
-        logger.error(f"Lỗi khi kiểm tra/tạo database PostgreSQL: {e}")
-        raise
+        logger.warning(f"⚠️ Không thể tạo database tự động (bỏ qua): {e}")
 
 
 async def init_db():
