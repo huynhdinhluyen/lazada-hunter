@@ -13,6 +13,10 @@ try:
 except ImportError:
     genai = None
 
+import warnings
+warnings.filterwarnings("ignore", message=".*automatic function calling.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="google.genai")
+
 
 # =============================================================================
 # 1. FAST-PATH GUARDRAILS (STAGE 1: PURE REGEX / ZERO TOKEN COST)
@@ -162,9 +166,11 @@ class LLMStructuredParser:
 
         # 2. Nếu là Gemini Model
         if "gemini" in target_model and self.gemini_client:
+            # Map model name sang model mới nhất nếu là chuỗi chung hoặc model cũ
+            gemini_model = "gemini-3.6-flash" if ("2.0" in target_model or target_model == "gemini") else target_model
             try:
                 response = self.gemini_client.models.generate_content(
-                    model=target_model,
+                    model=gemini_model,
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         temperature=0.1,
@@ -178,7 +184,7 @@ class LLMStructuredParser:
                         parsed_result.search_keyword = message
                     return parsed_result
             except Exception as e:
-                logger.warning(f"Lỗi khi gọi Gemini Structured Parser ({target_model}): {e}")
+                logger.warning(f"Lỗi khi gọi Gemini Structured Parser ({gemini_model}): {e}")
             return None
 
         return None
