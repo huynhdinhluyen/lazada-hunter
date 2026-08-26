@@ -14,26 +14,33 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 
 def _build_async_engine():
-    """Tạo async engine với xử lý SSL đúng cho asyncpg (Neon/Supabase).
+    """Tạo async engine với xử lý SSL đúng cho asyncpg (Neon/Supabase/Cloud).
     
-    asyncpg không hỗ trợ `?sslmode=require` trong URL.
-    Cần bỏ query param này và truyền qua `connect_args` riêng.
+    asyncpg không hỗ trợ các query params của libpq (như `?sslmode=require`, `channel_binding=...`).
+    Hàm này tự động tách và chuyển hóa chúng thành `connect_args={'ssl': ssl_context}` chuẩn.
     """
     url = settings.async_db_url
-    connect_args = {}
+    connect_args = {
+        "timeout": 30,
+        "command_timeout": 30,
+    }
     
-    # Xử lý SSL cho cloud providers (Neon, Supabase, Render...)
+    # Xử lý SSL và query params cho cloud providers (Neon, Supabase, Render...)
     if settings.is_production:
         parsed = urlparse(url)
         params = parse_qs(parsed.query)
-        sslmode = params.pop("sslmode", ["require"])[0]  # Lấy giá trị, mặc định require
         
-        # Xây lại URL không có sslmode
+        # Bóc tách các tham số của libpq/psycopg2 mà asyncpg không hỗ trợ
+        sslmode = params.pop("sslmode", ["require"])[0]
+        params.pop("channel_binding", None)
+        params.pop("target_session_attrs", None)
+        
+        # Xây lại clean URL
         new_query = urlencode({k: v[0] for k, v in params.items()})
         clean_url = urlunparse(parsed._replace(query=new_query))
         
-        # asyncpg dùng ssl context riêng
-        if sslmode in ("require", "verify-ca", "verify-full"):
+        # Thiết lập SSLContext cho asyncpg
+        if sslmode in ("require", "verify-ca", "verify-full", "prefer"):
             ssl_ctx = ssl.create_default_context()
             ssl_ctx.check_hostname = False
             ssl_ctx.verify_mode = ssl.CERT_NONE
@@ -123,7 +130,7 @@ async def init_db():
                 pass
         logger.info("✅ Đã đồng bộ toàn bộ Schema & Tables vào PostgreSQL.")
     except Exception as e:
-        logger.error(f"❌ Khởi tạo database thất bại: {type(e).__name__}: {e}")
+        logger.exception(f"❌ Khởi tạo database thất bại ({type(e).__name__}): {e}")
         raise
 
     # 2. Khởi tạo Qdrant Collection (nếu cấu hình sẵn sàng)
