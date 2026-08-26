@@ -362,7 +362,7 @@ class LazadaScraper(BaseScraper):
         }""")
 
         # 2. Bóc tách dữ liệu DOM & JavaScript Context (Tên, Giá, Đánh giá, Lượt bán, Specs, Reviews)
-        dom_data = page.evaluate("""() => {
+        dom_data = page.evaluate(r"""() => {
             const titleEl = document.querySelector('.pdp-mod-product-badge-title') || document.querySelector('h1');
             const priceEl = document.querySelector('.pdp-mod-product-price-v2') ||
                             document.querySelector('.pdp-v2-product-price-content') ||
