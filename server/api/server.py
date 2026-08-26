@@ -35,6 +35,20 @@ async def lifespan(app: FastAPI):
     # Khởi động Background Cron Job theo dõi giá Watchlist
     watchlist_scheduler.start()
     
+    # Pre-warm và kiểm tra Playwright Chromium trên nền background (không chặn startup)
+    def _warm_playwright():
+        try:
+            from scrapers.lazada_scraper import _launch_browser_safe
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                b = _launch_browser_safe(p)
+                b.close()
+            logger.info("✅ [PLAYWRIGHT] Chromium Browser đã sẵn sàng phục vụ cào dữ liệu.")
+        except Exception as e:
+            logger.debug(f"ℹ️ Playwright pre-warm: {e}")
+
+    asyncio.create_task(asyncio.to_thread(_warm_playwright))
+    
     yield
     
     # Dừng Scheduler khi tắt server
