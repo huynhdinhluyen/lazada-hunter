@@ -22,6 +22,12 @@ try:
 except ImportError:
     genai = None
 
+import warnings
+# Bỏ qua cảnh báo AFC từ google-genai SDK
+warnings.filterwarnings("ignore", message=".*automatic function calling.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="google.genai")
+
+
 
 class TaskComplexity(str, enum.Enum):
     LOW = "low"          # Tác vụ nhẹ: phân loại intent, trích xuất thực thể, chuẩn hóa ngắn -> Dùng Llama 3.1 8B (tiết kiệm token)
@@ -113,9 +119,9 @@ class DynamicModelRouter:
                     f"Kích hoạt cơ chế Failover chuyển sang Google Gemini..."
                 )
 
-        # 2. Failover: Chuyển sang Google Gemini
+        # 2. Failover: Chuyển sang Google Gemini (cập nhật model mới nhất gemini-3.6-flash)
         if self._gemini_client:
-            for gemini_model in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"]:
+            for gemini_model in ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash"]:
                 try:
                     logger.info(f"⚡ [AI ROUTER] Chuyển hướng sang Google Gemini ({gemini_model})")
                     full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt

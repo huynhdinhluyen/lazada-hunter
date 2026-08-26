@@ -1,10 +1,11 @@
 import json
 import uuid
 import re
+import urllib.parse
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, or_
 from sqlalchemy.sql import func
 from loguru import logger
 
@@ -26,6 +27,7 @@ from services.crawler_service import crawler_service
 from services.data_pipeline import pipeline_service
 from services.embedding_service import embedding_service
 from services.qdrant_store import qdrant_store
+from ai_engine.product_guardrail import product_guardrail
 
 try:
     from google import genai
@@ -521,7 +523,9 @@ class ShoppingAssistant:
         )
         ai_res = await self._generate_text(prompt, model=model)
         if ai_res:
-            return ai_res, comparison_data
+            prods_for_sanitize = [p for p in (prods_a + prods_b) if p]
+            cleaned_text = self._sanitize_markdown_links(ai_res, prods_for_sanitize)
+            return cleaned_text, comparison_data
 
         # Fallback Comparison Table
         text = (
@@ -540,74 +544,138 @@ class ShoppingAssistant:
         return text, comparison_data
 
     @staticmethod
+    def _sanitize_markdown_links(text: str, products: List[Any]) -> str:
+        """
+        Bảo vệ toàn diện chống hallucination link từ LLM:
+        - Quét mọi Markdown link dạng [Label](url) trong câu trả lời.
+        - Nếu URL trùng khớp với link thật đã cào -> Giữ nguyên.
+        - Nếu LLM tự chế/rút gọn link -> Tự động ánh xạ về link thật của sản phẩm tương ứng trong danh sách cào được.
+        - Nếu không tìm thấy sản phẩm cụ thể -> Thay bằng link tìm kiếm chuẩn trên Lazada (đảm bảo không 404).
+        """
+        if not text or not products:
+            return text
+
+        valid_urls = set()
+        for p in products:
+            u = getattr(p, "url", None) or (p.get("url") if isinstance(p, dict) else None)
+            if u:
+                valid_urls.add(u.strip())
+
+        def replace_link(match):
+            label = match.group(1).strip()
+            url = match.group(2).strip()
+
+            # 1. Trùng khớp chính xác với link thật đã cào -> Giữ nguyên
+            if url in valid_urls:
+                return match.group(0)
+
+            # 2. Tìm sản phẩm thật khớp nhất theo tên / nhãn
+            label_clean = label.lower()
+            best_product_url = None
+            best_score = 0.0
+
+            for p in products:
+                p_url = getattr(p, "url", None) or (p.get("url") if isinstance(p, dict) else None)
+                p_name = getattr(p, "name", None) or (p.get("name") if isinstance(p, dict) else "")
+                if not p_url or not p_name:
+                    continue
+
+                p_name_lower = p_name.lower()
+                words = [w for w in label_clean.split() if len(w) > 2]
+                if words:
+                    matched_cnt = sum(1 for w in words if w in p_name_lower)
+                    score = matched_cnt / len(words)
+                    if score > best_score and score >= 0.4:
+                        best_score = score
+                        best_product_url = p_url
+
+            if best_product_url:
+                return f"[{label}]({best_product_url})"
+
+            # 3. Fallback an toàn: Dẫn tới trang tìm kiếm chính xác của Lazada
+            safe_query = urllib.parse.quote(label)
+            return f"[{label}](https://www.lazada.vn/catalog/?q={safe_query})"
+
+        return re.sub(r'\[([^\]]+)\]\((https?://[^\)]+)\)', replace_link, text)
+
+    @staticmethod
+    def _extract_core_product_keywords(query: str) -> List[str]:
+        """
+        Tách và trích xuất danh từ chỉ sản phẩm/thiết bị cốt lõi.
+        Loại bỏ stop words và TẤT CẢ các tính từ chỉ chất lượng/mô tả chung (cao cấp, giá rẻ, chính hãng...).
+        """
+        stopwords = {
+            "tôi", "toi", "muốn", "muon", "cần", "can", "hãy", "hay", "tư", "tu", "vấn", "van",
+            "cho", "đời", "doi", "mới", "moi", "loại", "loai", "các", "cac", "những", "nhung",
+            "cái", "cai", "cục", "cuc", "con", "chiếc", "chiec", "mua", "tìm", "tim", "giúp",
+            "giup", "nào", "nao", "gì", "gi", "ở", "o", "tại", "tai", "nhà", "nha", "để", "de",
+            "dùng", "dung", "sử", "su", "với", "voi", "tầm", "tam", "khoảng", "khoang"
+        }
+
+        modifiers = {
+            "cao", "cấp", "chính", "hãng", "giá", "rẻ", "tốt", "nhất", "mini", "nhỏ", "gọn",
+            "bền", "đẹp", "xịn", "pro", "max", "plus", "vip", "đa", "năng", "thông", "minh",
+            "tiện", "lợi", "nhập", "khẩu", "hot", "sale", "sỉ", "combo", "freeship", "chất",
+            "lượng", "full", "box", "chuẩn", "đắt", "tiền", "bản", "hàng", "chính", "hiệu"
+        }
+
+        words = [w.lower() for w in query.split() if len(w) >= 2]
+        non_stop = [w for w in words if w not in stopwords]
+        core_nouns = [w for w in non_stop if w not in modifiers]
+        return core_nouns if core_nouns else non_stop
+
+    @classmethod
     def _rank_products_by_relevance(
+        cls,
         candidates: List[Product], 
         raw_query: str, 
         search_kw: str, 
         budget_max: Optional[float] = None
     ) -> List[Product]:
-        """Thuật toán xếp hạng và phân loại sản phẩm chính xác theo danh mục, thương hiệu và ngữ nghĩa"""
-        query_text = f"{raw_query} {search_kw}".lower()
+        """Thuật toán xếp hạng và lọc sản phẩm chính xác theo từ khóa danh từ cốt lõi, thương hiệu và ngữ nghĩa"""
+        if not candidates:
+            return []
+
+        core_nouns = cls._extract_core_product_keywords(f"{search_kw} {raw_query}")
         scored = []
-
-        # Các nhóm danh mục sản phẩm cốt lõi
-        categories = {
-            "phone": ["điện thoại", "smartphone", "iphone", "galaxy", "pixel", "redmi", "xiaomi", "oppo", "dien thoai"],
-            "earphone": ["tai nghe", "headphone", "earphone", "earbuds", "airpods"],
-            "mouse": ["chuột", "mouse"],
-            "keyboard": ["bàn phím", "keyboard"],
-            "laptop": ["laptop", "máy tính xách tay", "macbook"],
-            "watch": ["đồng hồ", "smartwatch"],
-            "medicine": ["thuốc", "siro", "viên ngậm", "dược phẩm"]
-        }
-
-        # Xác định danh mục người dùng đang tìm
-        target_category = None
-        for cat, kws in categories.items():
-            if any(kw in query_text for kw in kws):
-                target_category = cat
-                break
-
         for p in candidates:
-            name_lower = p.name.lower()
+            name_lower = (p.name or "").lower()
             score = 0.0
 
-            # 1. Khớp đúng danh mục mong muốn
-            if target_category:
-                matched_target = any(kw in name_lower for kw in categories[target_category])
-                if matched_target:
-                    score += 25.0
-                else:
-                    # Phạt nặng sản phẩm thuộc danh mục khác (tránh đề xuất tai nghe/chuột/dây điện khi hỏi điện thoại)
-                    for other_cat, other_kws in categories.items():
-                        if other_cat != target_category and any(kw in name_lower for kw in other_kws):
-                            score -= 35.0
-                    if any(neg in name_lower for neg in ["dây điện", "cáp sạc", "củ sạc", "ốp lưng", "kính cường lực", "bao da", "miếng dán"]):
-                        score -= 30.0
+            # 1. BẮT BUỘC: Phải chứa ít nhất 1 DANH TỪ CỐT LÕI (Core Noun) của sản phẩm
+            matched_nouns = [w for w in core_nouns if w in name_lower]
+            if not matched_nouns:
+                # Nếu chỉ khớp từ phụ (như 'cao cấp', 'giá rẻ') mà không có danh từ cốt lõi -> Loại bỏ 100%
+                continue
 
-            # 2. Khớp thương hiệu (Samsung, Apple, Google, Logitech, ...)
-            brands = ["samsung", "apple", "google", "logitech", "xiaomi", "oppo", "sony", "asus", "dell", "lenovo"]
-            for b in brands:
-                if b in query_text:
-                    if b in name_lower or (p.brand and b in p.brand.lower()):
-                        score += 15.0
-                    else:
-                        score -= 8.0
+            match_ratio = len(matched_nouns) / len(core_nouns) if core_nouns else 0
+            score += len(matched_nouns) * 25.0 + match_ratio * 30.0
 
-            # 3. Khớp cụm từ khóa có ý nghĩa (bỏ stopwords)
-            stopwords = {"tôi", "cần", "hãy", "tư", "vấn", "cho", "đời", "mới", "loại", "các", "những", "cái", "mua", "tìm", "giúp", "nào", "gì", "rẻ", "tốt", "nhất"}
-            words = [w for w in search_kw.lower().split() if len(w) > 1 and w not in stopwords]
-            matched_words = sum(1 for w in words if w in name_lower)
-            score += matched_words * 4.0
+            # 2. Khớp cụm từ nguyên văn
+            if search_kw.lower() in name_lower:
+                score += 40.0
+
+            # 3. Phạt nặng nếu đề xuất sản phẩm thuộc danh mục lệch hoàn toàn
+            neg_keywords = ["kẹo", "bánh", "dù câu", "câu cá", "quần", "áo", "váy", "giày", "dép", "nước giặt", "dầu gội", "sữa tắm", "tất", "vớ"]
+            if not any(neg in f"{search_kw} {raw_query}".lower() for neg in neg_keywords):
+                if any(neg in name_lower for neg in neg_keywords):
+                    score -= 200.0
+
+            # Phạt phụ kiện nếu người dùng tìm thiết bị chính
+            main_device_terms = ["router", "wifi", "điện thoại", "iphone", "samsung", "laptop", "chuột", "bàn phím", "tai nghe"]
+            if any(term in core_nouns for term in main_device_terms):
+                if any(neg in name_lower for neg in ["dây điện", "cáp sạc", "củ sạc", "ốp lưng", "kính cường lực", "bao da", "miếng dán"]):
+                    if not any(acc in f"{search_kw} {raw_query}".lower() for acc in ["cáp", "sạc", "ốp", "kính", "bao da"]):
+                        score -= 50.0
 
             # 4. Giá cả phù hợp ngân sách
             if budget_max and budget_max > 0:
-                if p.current_price <= budget_max:
+                if p.current_price and p.current_price <= budget_max:
                     score += 5.0
-                elif p.current_price > budget_max * 1.2:
-                    score -= 10.0
+                elif p.current_price and p.current_price > budget_max * 1.2:
+                    score -= 15.0
 
-            # 5. Điểm phụ: Độ uy tín & lượt bán
+            # 5. Điểm phụ: Lượt bán & Đánh giá
             score += min((p.historical_sold or 0) / 1000.0, 3.0)
             score += (p.rating_star or 0.0) * 0.5
 
@@ -627,10 +695,11 @@ class ShoppingAssistant:
         """Xử lý gợi ý mua sắm: Tra cứu Qdrant Vector Store trước, cào dữ liệu live nếu cần, và tổng hợp bài tư vấn"""
         search_kw = classification.search_keyword or raw_msg
         budget_max = classification.entities.budget_max
+        core_nouns = self._extract_core_product_keywords(search_kw)
 
-        logger.info(f"🔍 [RECOMMENDATION] Đối soát sản phẩm cho từ khóa: '{search_kw}' (Ngân sách tối đa: {budget_max or 'Không giới hạn'})")
+        logger.info(f"🔍 [RECOMMENDATION] Đối soát sản phẩm cho từ khóa: '{search_kw}' (Core Nouns: {core_nouns}, Ngân sách: {budget_max or 'Không giới hạn'})")
         
-        # 1. Qdrant Semantic Search: Tìm kiếm siêu tốc qua Vector DB trước
+        # 1. Qdrant Semantic Search: Tìm kiếm qua Vector DB với ngưỡng tương đồng tin cậy
         qdrant_product_ids = []
         if qdrant_store.is_available:
             try:
@@ -638,17 +707,33 @@ class ShoppingAssistant:
                 qdrant_hits = qdrant_store.search_similar(
                     query_vector=query_vec,
                     limit=20,
-                    score_threshold=0.25,
+                    score_threshold=0.40,
                     price_max=budget_max,
                 )
                 qdrant_product_ids = [hit["id"] for hit in qdrant_hits]
-                logger.info(f"🧠 [QDRANT] Tìm thấy {len(qdrant_product_ids)} sản phẩm tương đồng cho '{search_kw}'")
+                logger.info(f"🧠 [QDRANT] Tìm thấy {len(qdrant_product_ids)} sản phẩm tương đồng cao cho '{search_kw}'")
             except Exception as e:
                 logger.warning(f"Qdrant search lỗi, fallback sang DB: {e}")
 
-        # 2. Nếu chưa có sản phẩm phù hợp trong kho (< 2 sản phẩm), mới kích hoạt Live Crawler từ Lazada
+        # 2. Lấy Product entities từ PostgreSQL (hoặc tìm kiếm ILIKE theo DANH TỪ CỐT LÕI nếu Qdrant trống)
+        db_candidates: List[Product] = []
+        if qdrant_product_ids:
+            res_db = await session.execute(select(Product).where(Product.id.in_(qdrant_product_ids)))
+            db_map = {p.id: p for p in res_db.scalars().all()}
+            db_candidates = [db_map[pid] for pid in qdrant_product_ids if pid in db_map]
+        else:
+            # Fallback thông minh: CHỈ tìm kiếm theo core_nouns (như 'router', 'wifi'), TUYỆT ĐỐI không query theo 'cao cấp'
+            if core_nouns:
+                conditions = [Product.name.ilike(f"%{w}%") for w in core_nouns]
+                res_db = await session.execute(select(Product).where(or_(*conditions)).limit(30))
+                db_candidates = list(res_db.scalars().all())
+
+        # 3. Đếm số sản phẩm thực sự chứa Core Nouns trong kho
+        valid_cached_prods = [p for p in db_candidates if any(w in (p.name or "").lower() for w in core_nouns)]
+        
+        # 4. Nếu kho dữ liệu chưa có đủ sản phẩm thực sự khớp (< 2 sản phẩm), kích hoạt Live Crawler từ Lazada
         fresh_products: List[Product] = []
-        if len(qdrant_product_ids) < 2:
+        if len(valid_cached_prods) < 2:
             try:
                 logger.info(f"🕷️ [LIVE CRAWL] Kho chưa có đủ sản phẩm cho '{search_kw}'. Kích hoạt cào trực tiếp từ Lazada...")
                 crawled_items = await crawler_service.scrape_products(keyword_or_url=search_kw, platform="lazada", limit=10)
@@ -658,31 +743,43 @@ class ShoppingAssistant:
             except Exception as e:
                 logger.warning(f"Live crawler gặp sự cố: {e}")
 
-        # 3. Lấy Product entities từ PostgreSQL (theo thứ tự Qdrant score)
-        if qdrant_product_ids:
-            res_db = await session.execute(select(Product).where(Product.id.in_(qdrant_product_ids)))
-            db_map = {p.id: p for p in res_db.scalars().all()}
-            # Giữ thứ tự score từ Qdrant
-            db_candidates = [db_map[pid] for pid in qdrant_product_ids if pid in db_map]
-        else:
-            # Fallback: Lấy sản phẩm mới nhất từ DB nếu Qdrant không khả dụng
-            res_db = await session.execute(select(Product).order_by(Product.id.desc()).limit(100))
-            db_candidates = list(res_db.scalars().all())
-
-        # Gộp sản phẩm vừa cào (ưu tiên hàng đầu) và sản phẩm từ Qdrant/DB
+        # Gộp sản phẩm vừa cào (ưu tiên hàng đầu) và sản phẩm từ DB
         seen_ids = set()
         all_candidates = []
-        for p in fresh_products + db_candidates:
+        for p in fresh_products + valid_cached_prods:
             if p.id not in seen_ids:
                 seen_ids.add(p.id)
                 all_candidates.append(p)
 
-        # 4. Lọc và xếp hạng sản phẩm chính xác theo Intent và Category
+        # 5. Lọc và xếp hạng sản phẩm nghiêm ngặt theo từ khóa & danh mục
         products = self._rank_products_by_relevance(all_candidates, raw_msg, search_kw, budget_max)
-        if not products and all_candidates:
-            products = all_candidates[:6]
+        budget_range = f"Dưới {budget_max:,.0f} đ" if budget_max else "Phù hợp thị trường"
 
-        # Chuẩn bị context sản phẩm
+        # 6. Xử lý trường hợp không tìm thấy sản phẩm nào khớp
+        if not products:
+            logger.info(f"ℹ️ [RECOMMENDATION] Không có sản phẩm nào trong kho khớp với '{search_kw}'. Tạo bài tư vấn chọn mua tổng quan.")
+            advice_prompt = (
+                f"{SYSTEM_ROLE_PROMPT}\n\n"
+                f"Yêu cầu của người dùng: \"{raw_msg}\"\n"
+                f"Sản phẩm đang tìm kiếm: \"{search_kw}\"\n"
+                f"Ngân sách dự kiến: {budget_range}\n\n"
+                f"LƯU Ý QUAN TRỌNG: Hiện tại hệ thống chưa có sẵn danh sách sản phẩm cào trực tiếp từ sàn cho từ khóa này.\n"
+                f"Hãy đóng vai chuyên gia mua sắm và viết bài tư vấn chọn mua chuyên nghiệp:\n"
+                f"1. Xác nhận đúng nhu cầu của người dùng (ví dụ: tư vấn chọn mua {search_kw}).\n"
+                f"2. Nêu các tiêu chí kỹ thuật cốt lõi cần lưu ý khi chọn mua loại sản phẩm này (thương hiệu uy tín, thông số chuẩn, tính năng cần có...).\n"
+                f"3. Gợi ý các phân khúc giá và model tiêu biểu trên thị trường.\n"
+                f"4. TUYỆT ĐỐI KHÔNG tự bịa đặt link sản phẩm giả mạo.\n"
+                f"5. Hướng dẫn người dùng có thể gửi link sản phẩm cụ thể trên Lazada vào khung chat để AI bóc tách giá và phân tích sâu.\n"
+            )
+            ai_res = await self._generate_text(advice_prompt, model=model)
+            if ai_res:
+                guarded_text = product_guardrail.guard_recommendation_output(ai_res, [], raw_msg, search_kw)
+                return guarded_text, []
+
+            guarded_text = product_guardrail.guard_recommendation_output("", [], raw_msg, search_kw)
+            return guarded_text, []
+
+        # 6. Chuẩn bị context sản phẩm thật đã cào
         prod_context = ""
         for idx, p in enumerate(products, 1):
             prod_context += (
@@ -692,15 +789,14 @@ class ShoppingAssistant:
                 f"   - Shop: {p.shop_name or 'Gian hàng TMĐT'} | Link: {p.url}\n\n"
             )
 
-        budget_range = f"Dưới {budget_max:,.0f} đ" if budget_max else "Phù hợp thị trường"
-
         prompt = (
             f"{SYSTEM_ROLE_PROMPT}\n\n"
             f"{RECOMMENDATION_SYNTHESIS_PROMPT.format(user_query=raw_msg, budget_range=budget_range, crawled_products_context=prod_context)}"
         )
         ai_res = await self._generate_text(prompt, model=model)
         if ai_res:
-            return ai_res, list(products)
+            guarded_text = product_guardrail.guard_recommendation_output(ai_res, list(products), raw_msg, search_kw)
+            return guarded_text, list(products)
 
         # Fallback Synthesis
         text = f"### 🛒 TOP SẢN PHẨM ĐÁNG MUA NHẤT THEO YÊU CẦU CỦA BẠN:\n\n"
