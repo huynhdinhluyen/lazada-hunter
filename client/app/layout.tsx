@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { SessionProvider } from 'next-auth/react';
+import { SpeedInsights } from '@vercel/speed-insights/next';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -29,6 +30,7 @@ export default function RootLayout({
         <SessionProvider>
           {children}
         </SessionProvider>
+        <SpeedInsights />
       </body>
     </html>
   );
