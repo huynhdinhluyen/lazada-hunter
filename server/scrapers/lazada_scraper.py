@@ -15,7 +15,40 @@ from scrapers.base import BaseScraper
 from scrapers.anti_bot import (
     get_browser_headers, STEALTH_JS_PAYLOAD, get_random_viewport
 )
+import subprocess
+import sys
 from config.settings import settings
+
+
+def _launch_browser_safe(p):
+    """Khởi chạy Playwright Chromium an toàn, tự động tải Chromium nếu môi trường Cloud/Docker bị thiếu binary."""
+    launch_args = [
+        "--disable-blink-features=AutomationControlled",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-infobars"
+    ]
+    try:
+        return p.chromium.launch(
+            headless=settings.CRAWLER_HEADLESS,
+            args=launch_args
+        )
+    except Exception as e:
+        err_msg = str(e)
+        if "Executable doesn't exist" in err_msg or "playwright install" in err_msg:
+            logger.warning("📦 [PLAYWRIGHT] Phát hiện thiếu Chromium binary trên môi trường Cloud. Bắt đầu tự động tải Chromium...")
+            cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            if res.returncode == 0:
+                logger.info("✅ [PLAYWRIGHT] Cài đặt Chromium thành công!")
+            else:
+                logger.warning(f"⚠️ [PLAYWRIGHT] Cài đặt Chromium trả về mã lỗi: {res.stderr}")
+            return p.chromium.launch(
+                headless=settings.CRAWLER_HEADLESS,
+                args=launch_args
+            )
+        raise e
+
 
 
 class LazadaScraper(BaseScraper):
@@ -51,15 +84,7 @@ class LazadaScraper(BaseScraper):
 
         with sync_playwright() as p:
             viewport = get_random_viewport()
-            browser = p.chromium.launch(
-                headless=settings.CRAWLER_HEADLESS,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-infobars"
-                ]
-            )
+            browser = _launch_browser_safe(p)
             context = browser.new_context(
                 viewport=viewport,
                 user_agent=get_browser_headers()["User-Agent"],
@@ -282,10 +307,7 @@ class LazadaScraper(BaseScraper):
             return results
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=settings.CRAWLER_HEADLESS,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
-            )
+            browser = _launch_browser_safe(p)
             context = browser.new_context(
                 viewport=get_random_viewport(),
                 user_agent=get_browser_headers()["User-Agent"],
@@ -316,10 +338,7 @@ class LazadaScraper(BaseScraper):
     def _get_product_detail_sync(self, product_url: str) -> Optional[ProductCreate]:
         """Lấy chi tiết 1 sản phẩm Lazada theo URL"""
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=settings.CRAWLER_HEADLESS,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
-            )
+            browser = _launch_browser_safe(p)
             context = browser.new_context(
                 viewport=get_random_viewport(),
                 user_agent=get_browser_headers()["User-Agent"],

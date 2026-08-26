@@ -119,9 +119,9 @@ class DynamicModelRouter:
                     f"Kích hoạt cơ chế Failover chuyển sang Google Gemini..."
                 )
 
-        # 2. Failover: Chuyển sang Google Gemini (cập nhật model mới nhất gemini-3.6-flash)
+        # 2. Failover: Chuyển sang Google Gemini (model mới nhất gemini-3.6-flash)
         if self._gemini_client:
-            for gemini_model in ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash"]:
+            for gemini_model in ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-1.5-flash"]:
                 try:
                     logger.info(f"⚡ [AI ROUTER] Chuyển hướng sang Google Gemini ({gemini_model})")
                     full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
