@@ -48,3 +48,5 @@ httpx>=0.27.0
 apscheduler>=3.10.4          # Cron & Periodic Crawling Engine
 loguru>=0.7.2                # Structured Async Logging
 tabulate>=0.9.0              # Markdown Table Rendering
+openpyxl>=3.1.5              # Excel Export Engine (.xlsx)
+
