@@ -28,6 +28,7 @@ from core.models import Product, PriceHistory
 from core.schemas import ChatRequest
 from ai_engine.shopping_assistant import shopping_assistant
 from sqlalchemy import select, func
+from api.server import app  # Expose app so `fastapi run` / ASGI servers find it directly
 
 
 async def crawl_command(keyword: str, platform: str, limit: int):
