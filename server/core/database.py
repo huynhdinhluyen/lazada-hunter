@@ -9,14 +9,50 @@ from config.settings import settings
 # Base ORM model class
 Base = declarative_base()
 
+import ssl
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
+
+def _build_async_engine():
+    """Tạo async engine với xử lý SSL đúng cho asyncpg (Neon/Supabase).
+    
+    asyncpg không hỗ trợ `?sslmode=require` trong URL.
+    Cần bỏ query param này và truyền qua `connect_args` riêng.
+    """
+    url = settings.async_db_url
+    connect_args = {}
+    
+    # Xử lý SSL cho cloud providers (Neon, Supabase, Render...)
+    if settings.is_production:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        sslmode = params.pop("sslmode", ["require"])[0]  # Lấy giá trị, mặc định require
+        
+        # Xây lại URL không có sslmode
+        new_query = urlencode({k: v[0] for k, v in params.items()})
+        clean_url = urlunparse(parsed._replace(query=new_query))
+        
+        # asyncpg dùng ssl context riêng
+        if sslmode in ("require", "verify-ca", "verify-full"):
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
+            connect_args["ssl"] = ssl_ctx
+        
+        url = clean_url
+    
+    return create_async_engine(
+        url,
+        echo=settings.DEBUG,
+        pool_size=5,
+        max_overflow=10,
+        pool_pre_ping=True,
+        connect_args=connect_args,
+    )
+
+
 # Async Engine for PostgreSQL
-engine = create_async_engine(
-    settings.async_db_url,
-    echo=settings.DEBUG,
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True
-)
+engine = _build_async_engine()
 
 # Async Session Factory
 AsyncSessionLocal = async_sessionmaker(
@@ -75,16 +111,20 @@ async def init_db():
     """Khởi tạo toàn bộ bảng trong PostgreSQL & Qdrant Collection"""
     ensure_database_exists()
     
-    # 1. Tạo Schema và các bảng PostgreSQL
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        # Đảm bảo cột ai_analysis tồn tại trên bảng products cũ
-        from sqlalchemy import text
-        try:
-            await conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_analysis JSON;"))
-        except Exception:
-            pass
-    logger.info("✅ Đã đồng bộ toàn bộ Schema & Tables vào PostgreSQL.")
+    try:
+        # 1. Tạo Schema và các bảng PostgreSQL
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            # Đảm bảo cột ai_analysis tồn tại trên bảng products cũ
+            from sqlalchemy import text
+            try:
+                await conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_analysis JSON;"))
+            except Exception:
+                pass
+        logger.info("✅ Đã đồng bộ toàn bộ Schema & Tables vào PostgreSQL.")
+    except Exception as e:
+        logger.error(f"❌ Khởi tạo database thất bại: {type(e).__name__}: {e}")
+        raise
 
     # 2. Khởi tạo Qdrant Collection (nếu cấu hình sẵn sàng)
     try:
