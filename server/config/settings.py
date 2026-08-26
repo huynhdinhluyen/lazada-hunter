@@ -31,19 +31,48 @@ class Settings(BaseSettings):
 
     @property
     def async_db_url(self) -> str:
-        """Tạo chuỗi kết nối Async PostgreSQL (asyncpg) an toàn"""
+        """Tạo chuỗi kết nối Async PostgreSQL (asyncpg) an toàn.
+        
+        Tự động chuẩn hóa URL từ các cloud provider (Neon, Supabase, Render, Railway):
+          postgres://...        → postgresql+asyncpg://...
+          postgresql://...      → postgresql+asyncpg://...
+          postgresql+asyncpg:// → giữ nguyên
+        """
         if self.DATABASE_URL:
-            return self.DATABASE_URL.get_secret_value()
+            url = self.DATABASE_URL.get_secret_value()
+            # Chuẩn hóa scheme cho asyncpg
+            if url.startswith("postgres://"):
+                url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+            elif url.startswith("postgresql://"):
+                url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            # Nếu đã là postgresql+asyncpg:// thì giữ nguyên
+            return url
         pwd = self.POSTGRES_PASSWORD.get_secret_value() if self.POSTGRES_PASSWORD else ""
         return f"postgresql+asyncpg://{self.POSTGRES_USER}:{pwd}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
     @property
     def sync_db_url(self) -> str:
-        """Tạo chuỗi kết nối Sync PostgreSQL (psycopg2) an toàn"""
+        """Tạo chuỗi kết nối Sync PostgreSQL (psycopg2) an toàn.
+        
+        Tự động chuẩn hóa URL từ các cloud provider:
+          postgres://...           → postgresql://...
+          postgresql+asyncpg://... → postgresql://...
+          postgresql://...         → giữ nguyên
+        """
         if self.SYNC_DATABASE_URL:
-            return self.SYNC_DATABASE_URL.get_secret_value()
-        pwd = self.POSTGRES_PASSWORD.get_secret_value() if self.POSTGRES_PASSWORD else ""
-        return f"postgresql://{self.POSTGRES_USER}:{pwd}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+            url = self.SYNC_DATABASE_URL.get_secret_value()
+        elif self.DATABASE_URL:
+            url = self.DATABASE_URL.get_secret_value()
+        else:
+            pwd = self.POSTGRES_PASSWORD.get_secret_value() if self.POSTGRES_PASSWORD else ""
+            return f"postgresql://{self.POSTGRES_USER}:{pwd}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        
+        # Chuẩn hóa scheme cho psycopg2 (sync)
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
+        elif url.startswith("postgresql+asyncpg://"):
+            url = url.replace("postgresql+asyncpg://", "postgresql://", 1)
+        return url
 
     # Crawler Settings
     CRAWLER_HEADLESS: bool = True
